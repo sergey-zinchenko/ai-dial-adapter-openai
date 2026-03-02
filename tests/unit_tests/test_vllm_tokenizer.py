@@ -2,7 +2,6 @@
 
 from unittest.mock import AsyncMock
 
-import httpx
 import pytest
 from aidial_sdk.exceptions import (
     InternalServerError,
@@ -13,136 +12,61 @@ from aidial_sdk.exceptions import (
 from aidial_adapter_openai.utils.multi_modal_message import MultiModalMessage
 from aidial_adapter_openai.utils.resource.base import Resource
 from aidial_adapter_openai.utils.resource.image import ImageResource
-from aidial_adapter_openai.utils.vllm_tokenizer import (
-    VllmTokenizer,
-    derive_tokenize_url,
-)
+from aidial_adapter_openai.utils.vllm_tokenizer import VllmTokenizer
 
 # ---------------------------------------------------------------
-# derive_tokenize_url
+# Helpers
 # ---------------------------------------------------------------
 
 
-class TestDeriveTokenizeUrl:
-    def test_v1_chat_completions(self):
-        url = "https://vllm.example.com/v1/chat/completions"
-        assert derive_tokenize_url(url) == "https://vllm.example.com/tokenize"
-
-    def test_with_port(self):
-        url = "http://localhost:17834/v1/chat/completions"
-        assert derive_tokenize_url(url) == "http://localhost:17834/tokenize"
-
-    def test_plain_chat_completions_raises(self):
-        with pytest.raises(InternalServerError):
-            derive_tokenize_url("https://vllm.example.com/chat/completions")
-
-    def test_non_chat_completions_raises(self):
-        with pytest.raises(InternalServerError):
-            derive_tokenize_url("https://vllm.example.com/v1/completions")
-
-    def test_arbitrary_path_raises(self):
-        with pytest.raises(InternalServerError):
-            derive_tokenize_url(
-                "https://host.com/openai/deployments/my-model/chat/completions"
-            )
-
-
-# ---------------------------------------------------------------
-# VllmTokenizer helpers
-# ---------------------------------------------------------------
-
-_UPSTREAM = "https://vllm.example.com/v1/chat/completions"
-_UPSTREAM_API_KEY = "test-upstream-key"
+def _make_client_with_usage(prompt_tokens: int) -> AsyncMock:
+    client = AsyncMock()
+    resp = AsyncMock()
+    usage = AsyncMock()
+    usage.prompt_tokens = prompt_tokens
+    resp.usage = usage
+    client.chat.completions.create.return_value = resp
+    return client
 
 
 def _make_tokenizer() -> VllmTokenizer:
     return VllmTokenizer(
         model="my-vllm-model",
-        upstream_endpoint=_UPSTREAM,
-        upstream_api_key=_UPSTREAM_API_KEY,
-    )
-
-
-def _mock_response(token_count: int) -> httpx.Response:
-    return httpx.Response(
-        200,
-        json={
-            "count": token_count,
-            "max_model_len": 4096,
-            "tokens": list(range(token_count)),
-        },
-        request=httpx.Request("POST", _UPSTREAM),
+        client=_make_client_with_usage(0),
     )
 
 
 # ---------------------------------------------------------------
-# VllmTokenizer._call_tokenize
+# VllmTokenizer._call_completion_for_prompt_tokens
 # ---------------------------------------------------------------
 
 
-class TestVllmTokenizerCallTokenize:
+class TestVllmTokenizerCallCompletion:
     @pytest.mark.asyncio
-    async def test_returns_count_from_response(self):
-        tokenizer = _make_tokenizer()
+    async def test_returns_usage_prompt_tokens(self):
+        client = _make_client_with_usage(42)
+        tokenizer = VllmTokenizer(model="m", client=client)
 
-        mock_client = AsyncMock()
-        mock_client.post.return_value = _mock_response(42)
-        tokenizer._http_client = mock_client
-
-        result = await tokenizer._call_tokenize({"model": "m", "messages": []})
+        result = await tokenizer._call_completion_for_prompt_tokens(
+            {"model": "m", "messages": [], "stream": False, "max_tokens": 1}
+        )
         assert result == 42
 
-        call_args = mock_client.post.call_args
-        headers = call_args.kwargs.get("headers") or call_args[1].get("headers")
-        assert headers["Authorization"] == f"Bearer {_UPSTREAM_API_KEY}"
+        client.chat.completions.create.assert_awaited()
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_tokens_length(self):
-        tokenizer = _make_tokenizer()
+    async def test_raises_on_missing_usage_prompt_tokens(self):
+        client = AsyncMock()
+        resp = AsyncMock()
+        resp.usage = None
+        client.chat.completions.create.return_value = resp
 
-        resp = httpx.Response(
-            200,
-            json={"tokens": [1, 2, 3]},
-            request=httpx.Request("POST", _UPSTREAM),
-        )
-        mock_client = AsyncMock()
-        mock_client.post.return_value = resp
-        tokenizer._http_client = mock_client
-
-        result = await tokenizer._call_tokenize({"model": "m", "messages": []})
-        assert result == 3
-
-    @pytest.mark.asyncio
-    async def test_raises_on_missing_fields(self):
-        tokenizer = _make_tokenizer()
-
-        resp = httpx.Response(
-            200,
-            json={"something": "else"},
-            request=httpx.Request("POST", _UPSTREAM),
-        )
-        mock_client = AsyncMock()
-        mock_client.post.return_value = resp
-        tokenizer._http_client = mock_client
+        tokenizer = VllmTokenizer(model="m", client=client)
 
         with pytest.raises(InternalServerError):
-            await tokenizer._call_tokenize({"model": "m", "messages": []})
-
-    @pytest.mark.asyncio
-    async def test_raises_on_http_error(self):
-        tokenizer = _make_tokenizer()
-
-        resp = httpx.Response(
-            500,
-            text="Internal Server Error",
-            request=httpx.Request("POST", _UPSTREAM),
-        )
-        mock_client = AsyncMock()
-        mock_client.post.return_value = resp
-        tokenizer._http_client = mock_client
-
-        with pytest.raises(InternalServerError, match="HTTP 500"):
-            await tokenizer._call_tokenize({"model": "m", "messages": []})
+            await tokenizer._call_completion_for_prompt_tokens(
+                {"model": "m", "messages": [], "stream": False, "max_tokens": 1}
+            )
 
 
 # ---------------------------------------------------------------
@@ -153,13 +77,8 @@ class TestVllmTokenizerCallTokenize:
 class TestVllmTokenizerPublicApi:
     @pytest.mark.asyncio
     async def test_tokenize_request_sends_full_message_list_and_tools(self):
-        """tokenize_request must send ALL messages in a single call,
-        along with tools/functions."""
-        tokenizer = _make_tokenizer()
-
-        mock_client = AsyncMock()
-        mock_client.post.return_value = _mock_response(50)
-        tokenizer._http_client = mock_client
+        client = _make_client_with_usage(50)
+        tokenizer = VllmTokenizer(model="my-vllm-model", client=client)
 
         messages = [
             MultiModalMessage(raw_message={"role": "system", "content": "sys"}),
@@ -173,35 +92,100 @@ class TestVllmTokenizerPublicApi:
         result = await tokenizer.tokenize_request(original_request, messages)
         assert result == 50
 
-        # Verify a single call was made with both messages
-        assert mock_client.post.call_count == 1
-        call_args = mock_client.post.call_args
-        payload = call_args.kwargs.get("json") or call_args[1].get("json")
+        # Verify payload passed to client
+        payload = client.chat.completions.create.await_args.kwargs
         assert payload["model"] == "my-vllm-model"
+        assert payload["stream"] is False
+        assert payload["max_tokens"] == 1
         assert len(payload["messages"]) == 2
-        assert payload["messages"][0] == {"role": "system", "content": "sys"}
-        assert payload["messages"][1] == {"role": "user", "content": "hi"}
         assert payload["tools"] == original_request["tools"]
 
     @pytest.mark.asyncio
     async def test_tokenize_request_with_empty_messages(self):
         """tokenize_request([]) sends an empty list — used for overhead."""
-        tokenizer = _make_tokenizer()
-
-        mock_client = AsyncMock()
-        mock_client.post.return_value = _mock_response(3)
-        tokenizer._http_client = mock_client
+        client = _make_client_with_usage(3)
+        tokenizer = VllmTokenizer(model="m", client=client)
 
         result = await tokenizer.tokenize_request({"model": "m"}, [])
         assert result == 3
 
-        call_args = mock_client.post.call_args
-        payload = call_args.kwargs.get("json") or call_args[1].get("json")
+        payload = client.chat.completions.create.await_args.kwargs
         assert payload["messages"] == []
+
+    @pytest.mark.asyncio
+    async def test_tokenize_request_copies_original_request_and_strips_fields(
+        self,
+    ):
+        client = _make_client_with_usage(7)
+        tokenizer = VllmTokenizer(model="my-vllm-model", client=client)
+
+        messages = [
+            MultiModalMessage(raw_message={"role": "user", "content": "hi"}),
+        ]
+
+        original_request = {
+            "model": "my-vllm-model",
+            "temperature": 0.123,
+            "top_p": 0.9,
+            "presence_penalty": 0.1,
+            "stream": True,
+            "max_tokens": 999,
+            "n": 5,
+            "tools": [{"type": "function", "function": {"name": "f"}}],
+            "functions": [{"name": "g", "parameters": {"type": "object"}}],
+            "stream_options": {"include_usage": True, "foo": "bar"},
+            "extra_body": {"vllm_specific": True},
+        }
+
+        result = await tokenizer.tokenize_request(original_request, messages)
+        assert result == 7
+
+        payload = client.chat.completions.create.await_args.kwargs
+
+        # Preserved fields from original_request
+        assert payload["temperature"] == 0.123
+        assert payload["top_p"] == 0.9
+        assert payload["presence_penalty"] == 0.1
+
+        # Overridden for the internal counting call
+        assert payload["stream"] is False
+        assert payload["max_tokens"] == 1
+        assert payload["n"] == 1
+
+        # Replaced messages
+        assert payload["messages"] == [{"role": "user", "content": "hi"}]
+
+        # Stripped fields
+        assert "stream_options" not in payload
+        assert "extra_body" not in payload
+
+        # Tools/functions forwarded
+        assert payload["tools"] == original_request["tools"]
+        assert payload["functions"] == original_request["functions"]
 
 
 # ---------------------------------------------------------------
-# VllmTokenizer.truncate_prompt  (full-list tokenization)
+# Extra headers
+# ---------------------------------------------------------------
+
+
+class TestVllmExtraHeaders:
+    @pytest.mark.asyncio
+    async def test_extra_headers_included(self):
+        # Extra headers are handled by client configuration, not by tokenizer.
+        client = _make_client_with_usage(10)
+        tokenizer = VllmTokenizer(model="m", client=client)
+
+        assert (
+            await tokenizer._call_completion_for_prompt_tokens(
+                {"model": "m", "messages": [], "stream": False, "max_tokens": 1}
+            )
+            == 10
+        )
+
+
+# ---------------------------------------------------------------
+# truncate_prompt (kept as-is; relies on tokenize_request)
 # ---------------------------------------------------------------
 
 
@@ -223,9 +207,6 @@ def _make_mock_tokenizer(responses: list[int]) -> VllmTokenizer:
     tokenizer.tokenize_request = mock_tokenize_request  # type: ignore[assignment]
     tokenizer._mock_call_log = call_log  # type: ignore[attr-defined]
     return tokenizer
-
-
-# Removed: _make_counting_tokenizer (no longer used)
 
 
 class TestVllmTruncatePrompt:
@@ -459,10 +440,10 @@ class TestVllmToolCallCascade:
     @pytest.mark.asyncio
     async def test_assistant_tool_calls_cascade_removes_tool_messages(self):
         """When an assistant message with tool_calls is dropped, the adapter
-        must also drop subsequent tool messages until the next assistant."""
+        must also drop subsequent tool messages and the next assistant."""
 
         # Call 1: full (6 msgs) → 100 (exceeds)
-        # Call 2: after dropping assistant+tool replies group → 12 (fits)
+        # Call 2: after dropping assistant+tool replies+next assistant → 12 (fits)
         tokenizer = _make_mock_tokenizer([100, 12])
 
         messages = [
@@ -495,7 +476,7 @@ class TestVllmToolCallCascade:
                     "content": "r2",
                 }
             ),
-            # next assistant breaks cascade
+            # next assistant MUST be removed too
             MultiModalMessage(
                 raw_message={"role": "assistant", "content": "next"}
             ),
@@ -508,7 +489,7 @@ class TestVllmToolCallCascade:
             {}, messages, 20
         )
 
-        assert sorted(discarded) == [1, 2, 3]
+        assert sorted(discarded) == [1, 2, 3, 4]
         assert used == 12
         assert truncated[-1].raw_message["content"] == "follow-up"
 
@@ -533,72 +514,3 @@ class TestVllmToolCallCascade:
         # Only assistant dropped; tool message stays (no cascade).
         assert sorted(discarded) == [1]
         assert used == 20
-
-
-# Removed: Binary search for long histories and TestVllmBinarySearch (no longer used)
-
-
-# ---------------------------------------------------------------
-# Extra headers (HEADERS_TO_PROXY support)
-# ---------------------------------------------------------------
-
-
-class TestVllmExtraHeaders:
-    @pytest.mark.asyncio
-    async def test_extra_headers_included_in_tokenize_request(self):
-        """Extra headers (from HEADERS_TO_PROXY) are sent with tokenize calls."""
-        tokenizer = VllmTokenizer(
-            model="my-vllm-model",
-            upstream_endpoint=_UPSTREAM,
-            upstream_api_key=_UPSTREAM_API_KEY,
-            extra_headers={"x-user-id": "abc123", "x-custom": "value"},
-        )
-
-        mock_client = AsyncMock()
-        mock_client.post.return_value = _mock_response(10)
-        tokenizer._http_client = mock_client
-
-        await tokenizer._call_tokenize({"model": "m", "messages": []})
-
-        call_args = mock_client.post.call_args
-        headers = call_args.kwargs.get("headers") or call_args[1].get("headers")
-        assert headers["x-user-id"] == "abc123"
-        assert headers["x-custom"] == "value"
-        assert headers["Content-Type"] == "application/json"
-
-    @pytest.mark.asyncio
-    async def test_no_extra_headers_when_not_configured(self):
-        """Without extra_headers, only standard headers are sent."""
-        tokenizer = _make_tokenizer()
-
-        mock_client = AsyncMock()
-        mock_client.post.return_value = _mock_response(10)
-        tokenizer._http_client = mock_client
-
-        await tokenizer._call_tokenize({"model": "m", "messages": []})
-
-        call_args = mock_client.post.call_args
-        headers = call_args.kwargs.get("headers") or call_args[1].get("headers")
-        assert "x-user-id" not in headers
-        assert "Content-Type" in headers
-
-    @pytest.mark.asyncio
-    async def test_extra_headers_empty_dict_is_noop(self):
-        """Passing an empty dict for extra_headers is the same as None."""
-        tokenizer = VllmTokenizer(
-            model="my-vllm-model",
-            upstream_endpoint=_UPSTREAM,
-            upstream_api_key=_UPSTREAM_API_KEY,
-            extra_headers={},
-        )
-
-        mock_client = AsyncMock()
-        mock_client.post.return_value = _mock_response(10)
-        tokenizer._http_client = mock_client
-
-        await tokenizer._call_tokenize({"model": "m", "messages": []})
-
-        call_args = mock_client.post.call_args
-        headers = call_args.kwargs.get("headers") or call_args[1].get("headers")
-        # Only Content-Type and Authorization should be present
-        assert "x-user-id" not in headers

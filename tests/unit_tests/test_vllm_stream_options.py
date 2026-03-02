@@ -6,6 +6,14 @@ import aidial_adapter_openai.chat_completions.gpt as gpt_module
 from aidial_adapter_openai.utils.vllm_tokenizer import VllmTokenizer
 
 
+def _stub_tokenizer(monkeypatch, tokenizer: VllmTokenizer) -> None:
+    async def _noop_truncate_prompt(*args, **kwargs):
+        messages = kwargs.get("messages") or args[1]
+        return messages, [], 0
+
+    monkeypatch.setattr(tokenizer, "truncate_prompt", _noop_truncate_prompt)
+
+
 @pytest.mark.asyncio
 async def test_vllm_stream_options_include_usage_injected(monkeypatch):
     """For vLLM streaming calls, the adapter must force stream_options.include_usage=True."""
@@ -38,9 +46,9 @@ async def test_vllm_stream_options_include_usage_injected(monkeypatch):
 
     tokenizer = VllmTokenizer(
         model="m",
-        upstream_endpoint="http://localhost:17834/v1/chat/completions",
-        upstream_api_key="k",
+        client=AsyncMock(),
     )
+    _stub_tokenizer(monkeypatch, tokenizer)
 
     request = {
         "model": "m",
@@ -93,9 +101,9 @@ async def test_vllm_stream_options_include_usage_merged(monkeypatch):
 
     tokenizer = VllmTokenizer(
         model="m",
-        upstream_endpoint="http://localhost:17834/v1/chat/completions",
-        upstream_api_key="k",
+        client=AsyncMock(),
     )
+    _stub_tokenizer(monkeypatch, tokenizer)
 
     request = {
         "model": "m",
@@ -150,9 +158,9 @@ async def test_vllm_non_stream_does_not_inject_stream_options(monkeypatch):
 
     tokenizer = VllmTokenizer(
         model="m",
-        upstream_endpoint="http://localhost:17834/v1/chat/completions",
-        upstream_api_key="k",
+        client=AsyncMock(),
     )
+    _stub_tokenizer(monkeypatch, tokenizer)
 
     request = {
         "model": "m",

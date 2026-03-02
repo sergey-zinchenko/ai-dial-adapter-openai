@@ -224,9 +224,7 @@ async def call_chat_completion(
         case D.VLLM:
             vllm_tokenizer = VllmTokenizer(
                 model=request_body["model"],
-                upstream_endpoint=upstream_endpoint,
-                upstream_api_key=creds.get("api_key"),
-                extra_headers=headers_to_proxy,
+                client=client,
             )
             response = await vllm_chat_completion(
                 request=request_body,
