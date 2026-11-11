@@ -33,6 +33,9 @@ from aidial_adapter_openai.chat_completions.mistral import (
 from aidial_adapter_openai.chat_completions.non_gpt import (
     chat_completion as non_gpt_chat_completion,
 )
+from aidial_adapter_openai.chat_completions.strata import (
+    extract_reasoning as strata_extract_reasoning,
+)
 from aidial_adapter_openai.chat_completions.vllm import (
     VllmTokenizer,
 )
@@ -242,7 +245,9 @@ async def call_chat_completion(
                 assert_never(deployment_type)
 
         case (
-            D.VLLM_CHAT_COMPLETIONS_API | D.QWEN3_ASR_VLLM_CHAT_COMPLETIONS_API
+            D.VLLM_CHAT_COMPLETIONS_API
+            | D.QWEN3_ASR_VLLM_CHAT_COMPLETIONS_API
+            | D.STRATA_CHAT_COMPLETIONS_API
         ):
             vllm_tokenizer = VllmTokenizer(
                 upstream_endpoint=upstream_endpoint,
@@ -255,10 +260,15 @@ async def call_chat_completion(
                 tokenizer=vllm_tokenizer,
             )
 
-            if deployment_type == D.VLLM_CHAT_COMPLETIONS_API:
-                response.body = vllm_extract_reasoning(response.body)
-            else:
-                response.body = vllm_extract_qwen3_asr_language(response.body)
+            match deployment_type:
+                case D.VLLM_CHAT_COMPLETIONS_API:
+                    response.body = vllm_extract_reasoning(response.body)
+                case D.QWEN3_ASR_VLLM_CHAT_COMPLETIONS_API:
+                    response.body = vllm_extract_qwen3_asr_language(
+                        response.body
+                    )
+                case D.STRATA_CHAT_COMPLETIONS_API:
+                    response.body = strata_extract_reasoning(response.body)
 
             return response
 

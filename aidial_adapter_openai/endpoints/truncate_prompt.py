@@ -157,6 +157,7 @@ async def truncate_prompt(
             D.RESPONSES_API
             | D.VLLM_CHAT_COMPLETIONS_API
             | D.QWEN3_ASR_VLLM_CHAT_COMPLETIONS_API
+            | D.STRATA_CHAT_COMPLETIONS_API
         ):
             vendor = app_config.get_vendor(
                 deployment_id, deployment.endpoint, request.headers

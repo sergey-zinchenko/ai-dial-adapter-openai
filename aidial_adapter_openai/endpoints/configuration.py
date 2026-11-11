@@ -68,6 +68,7 @@ def _get_deployment_configuration(deployment_type: D) -> type[BaseModel] | None:
             | D.GPT_GENERIC
             | D.VLLM_CHAT_COMPLETIONS_API
             | D.QWEN3_ASR_VLLM_CHAT_COMPLETIONS_API
+            | D.STRATA_CHAT_COMPLETIONS_API
         ):
             return None
 

@@ -217,6 +217,17 @@ def test_app_config_qwen3_asr_vllm_deployments(origin: str, deployment: str):
     assert ty.deployment_type == D.QWEN3_ASR_VLLM_CHAT_COMPLETIONS_API
 
 
+def test_app_config_strata_deployments(origin: str, deployment: str):
+    cfg = ApplicationConfig(STRATA_DEPLOYMENTS=[deployment])
+
+    ty = cfg.get_chat_completion_deployment_type(
+        deployment,
+        f"{origin}/whatever1/whatever2/chat/completions",
+    )
+
+    assert ty.deployment_type == D.STRATA_CHAT_COMPLETIONS_API
+
+
 @pytest.mark.parametrize(
     ("upstream_endpoint", "base_url", "foundry"),
     [
@@ -312,11 +323,16 @@ def test_get_vendor_rejects_unknown_upstream_vendor(deployment: str):
         ApplicationConfig(
             QWEN3_ASR_VLLM_DEPLOYMENTS=["qwen3-asr-vllm-deployment"]
         ),
+        ApplicationConfig(STRATA_DEPLOYMENTS=["strata-deployment"]),
     ],
 )
 def test_get_vendor_for_vllm_families(cfg: ApplicationConfig):
     deployment_id = next(
-        iter(cfg.VLLM_DEPLOYMENTS or cfg.QWEN3_ASR_VLLM_DEPLOYMENTS)
+        iter(
+            cfg.VLLM_DEPLOYMENTS
+            or cfg.QWEN3_ASR_VLLM_DEPLOYMENTS
+            or cfg.STRATA_DEPLOYMENTS
+        )
     )
     assert (
         cfg.get_vendor(
@@ -360,10 +376,15 @@ def test_is_azure_for_generic_deployment(deployment: str):
         ApplicationConfig(
             QWEN3_ASR_VLLM_DEPLOYMENTS=["qwen3-asr-vllm-deployment"]
         ),
+        ApplicationConfig(STRATA_DEPLOYMENTS=["strata-deployment"]),
     ],
 )
 def test_is_azure_for_non_azure_vllm_families(cfg: ApplicationConfig):
     deployment_id = next(
-        iter(cfg.VLLM_DEPLOYMENTS or cfg.QWEN3_ASR_VLLM_DEPLOYMENTS)
+        iter(
+            cfg.VLLM_DEPLOYMENTS
+            or cfg.QWEN3_ASR_VLLM_DEPLOYMENTS
+            or cfg.STRATA_DEPLOYMENTS
+        )
     )
     assert not cfg.is_azure(deployment_id)

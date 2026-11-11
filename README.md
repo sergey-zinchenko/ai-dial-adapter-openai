@@ -40,6 +40,7 @@
     - [Alibaba Cloud Model Studio Chat Completions API](#alibaba-cloud-model-studio-chat-completions-api)
     - [vLLM Chat Completion API](#vllm-chat-completion-api)
       - [Qwen3-ASR](#qwen3-asr)
+    - [Strata Chat Completion API](#strata-chat-completion-api)
     - [vLLM-Omni Audio API](#vllm-omni-audio-api)
       - [OpenMOSS](#openmoss)
     - [Anthropic Messages API](#anthropic-messages-api)
@@ -56,6 +57,7 @@
       - [Text tokenization](#text-tokenization)
       - [Image tokenization](#image-tokenization)
       - [vLLM tokenization](#vllm-tokenization)
+      - [Strata tokenization](#strata-tokenization)
       - [Responses API tokenization](#responses-api-tokenization)
     - [Tokenize endpoint](#tokenize-endpoint)
       - [DIAL Core configuration](#dial-core-configuration)
@@ -990,6 +992,38 @@ You can connect the [Qwen3-ASR](https://docs.vllm.ai/projects/recipes/en/latest/
 > [!NOTE]
 > `QWEN3_ASR_VLLM_DEPLOYMENTS` is separate from `VLLM_DEPLOYMENTS`. Deployments listed in `QWEN3_ASR_VLLM_DEPLOYMENTS` receive the ASR language extraction post-processing, while regular `VLLM_DEPLOYMENTS` receive reasoning extraction instead.
 
+#### Strata Chat Completion API
+
+[Strata](https://github.com/Niko1221/Strata) provides an OpenAI-compatible Chat Completions API and can be connected to the adapter.
+
+<details><summary>DIAL Core Config</summary>
+
+```json
+{
+  "models": {
+    "${DIAL_DEPLOYMENT_ID}": {
+      "type": "chat",
+      "endpoint": "${ADAPTER_ORIGIN}/openai/deployments/${STRATA_MODEL_NAME}/chat/completions",
+      "upstreams": [
+        {
+          "endpoint": "${STRATA_ORIGIN}/v1/chat/completions"
+        }
+      ]
+    }
+  }
+}
+```
+
+</details>
+
+Enable the Strata-specific flow by adding `${UPSTREAM_DEPLOYMENT_ID}` to the environment variable `STRATA_DEPLOYMENTS`.
+
+Notes:
+
+- **Image attachments**: supported and forwarded to the upstream.
+- **File and audio attachments**: forwarded to the upstream as is, which ignores them.
+- **Reasoning**: the thought process is reported in a DIAL stage titled `Reasoning` (see [Reasoning content](#reasoning-content)).
+
 #### vLLM-Omni Audio API
 
 [vLLM-Omni](https://docs.vllm.ai/projects/vllm-omni/en/latest/) serves text-to-speech models over an OpenAI-compatible [Speech API](https://docs.vllm.ai/projects/vllm-omni/en/latest/serving/speech_api/). Point the upstream at the `/v1/audio/speech` endpoint and the adapter will serve the deployment through the same [TTS flow](#text-to-speech-models-tts) as the Azure Audio API.
@@ -1243,7 +1277,7 @@ The reasoning tokens returned by the reasoning models are reported twice:
 
 In the streaming mode `reasoning_content` is reported in the response deltas the very same way as `content` is.
 
-The following upstream APIs are supported: [Azure OpenAI Chat Completions API](#azure-openai-chat-completions-api) *(e.g. `gpt-oss-120b`)*, [Mistral Chat Completion API](#mistral-chat-completion-api) *(Magistral models)*, [vLLM Chat Completion API](#vllm-chat-completion-api) *(e.g. `DeepSeek-R1`)* and the Responses API [reasoning summary](#reasoning-configuration).
+The following upstream APIs are supported: [Azure OpenAI Chat Completions API](#azure-openai-chat-completions-api) *(e.g. `gpt-oss-120b`)*, [Mistral Chat Completion API](#mistral-chat-completion-api) *(Magistral models)*, [vLLM Chat Completion API](#vllm-chat-completion-api) *(e.g. `DeepSeek-R1`)*, [Strata Chat Completion API](#strata-chat-completion-api) and the Responses API [reasoning summary](#reasoning-configuration).
 
 > [!NOTE]
 > The Claude models report the thought process in a stage titled `Thinking` as well as in the `reasoning_content` field.
@@ -1464,6 +1498,12 @@ The adapter first performs the standard Unified → OpenAI-compatible transforma
 Token counting is performed by vLLM for the entire request payload as-is (including tools and multimodal message parts). The adapter does not do any modality-specific token counting for vLLM.
 
 When `max_prompt_tokens` is set and the prompt exceeds the limit, the adapter truncates the conversation by removing whole messages from the oldest history until the vLLM-reported token count fits.
+
+##### Strata tokenization
+
+For deployments registered in `STRATA_DEPLOYMENTS`, the adapter relies on the upstream Strata tokenizer endpoint to count prompt tokens, using the same mechanism as for [vLLM tokenization](#vllm-tokenization): the fully constructed request payload is sent to the endpoint derived from the upstream chat completions URL (`.../v1/chat/completions` → `.../tokenize`).
+
+When `max_prompt_tokens` is set and the prompt exceeds the limit, the adapter truncates the conversation by removing whole messages from the oldest history until the upstream-reported token count fits.
 
 ##### Responses API tokenization
 
@@ -1971,6 +2011,7 @@ The following variables cluster all deployments into the groups of deployments w
 |GPT4O_MINI_DEPLOYMENTS|``|Comma-separated list of GPT-4o mini chat completion deployments. Example: `gpt-4o-mini-2024-07-18`|
 |VLLM_DEPLOYMENTS|``|Comma-separated list of deployments that use a vLLM OpenAI-compatible upstream, including [vLLM embedding deployments](#vllm-embeddings-api) and [vLLM-Omni TTS deployments](#vllm-omni-audio-api). Example: `vllm-llama3,embeddinggemma,moss-ttsd`|
 |QWEN3_ASR_VLLM_DEPLOYMENTS|``| Comma-separated list of [Qwen3-ASR deployments](#qwen3-asr) served via vLLM. Example: `qwen3-asr`|
+|STRATA_DEPLOYMENTS|``|Comma-separated list of [Strata deployments](#strata-chat-completion-api). Example: `strata-deepseek-r1`|
 |AZURE_AI_VISION_DEPLOYMENTS|``|Comma-separated list of Azure AI Vision embedding deployments. The endpoint of the deployment is expected to point to the Azure service: `https://<service-name>.cognitiveservices.azure.com/`|
 |AUDIO_AZURE_API_VERSION|2025-03-01-preview|The API version for requests to the [Azure Audio API](#azure-audio-api) endpoints.|
 

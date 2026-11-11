@@ -79,6 +79,7 @@ class ApplicationConfig(ExtraForbidModel):
     GPT4O_MINI_DEPLOYMENTS: list[str] = []
     VLLM_DEPLOYMENTS: list[str] = []
     QWEN3_ASR_VLLM_DEPLOYMENTS: list[str] = []
+    STRATA_DEPLOYMENTS: list[str] = []
     AZURE_AI_VISION_DEPLOYMENTS: list[str] = []
 
     API_VERSIONS_MAPPING: dict[str, str] = {}
@@ -93,6 +94,7 @@ class ApplicationConfig(ExtraForbidModel):
         for deployments in [
             self.VLLM_DEPLOYMENTS,
             self.QWEN3_ASR_VLLM_DEPLOYMENTS,
+            self.STRATA_DEPLOYMENTS,
         ]:
             if deployment_id in deployments:
                 return False
@@ -124,6 +126,7 @@ class ApplicationConfig(ExtraForbidModel):
         for deployments in [
             self.VLLM_DEPLOYMENTS,
             self.QWEN3_ASR_VLLM_DEPLOYMENTS,
+            self.STRATA_DEPLOYMENTS,
         ]:
             if deployment_id in deployments:
                 return Vendor.VLLM
@@ -233,6 +236,12 @@ class ApplicationConfig(ExtraForbidModel):
                 endpoint=chat_completions_parser.parse(upstream_endpoint),
             )
 
+        if deployment_id in self.STRATA_DEPLOYMENTS:
+            return DeploymentAPIType(
+                deployment_type=D.STRATA_CHAT_COMPLETIONS_API,
+                endpoint=chat_completions_parser.parse(upstream_endpoint),
+            )
+
         if deployment_id in self.GPT4O_DEPLOYMENTS:
             return DeploymentAPIType(
                 deployment_type=D.GPT4O,
@@ -270,6 +279,8 @@ class ApplicationConfig(ExtraForbidModel):
                 self.VLLM_DEPLOYMENTS.append(deployment_id)
             case D.QWEN3_ASR_VLLM_CHAT_COMPLETIONS_API:
                 self.QWEN3_ASR_VLLM_DEPLOYMENTS.append(deployment_id)
+            case D.STRATA_CHAT_COMPLETIONS_API:
+                self.STRATA_DEPLOYMENTS.append(deployment_id)
             case (
                 D.GPT_GENERIC
                 | D.RESPONSES_API
@@ -306,6 +317,7 @@ class ApplicationConfig(ExtraForbidModel):
                 "GPT4O_MINI_DEPLOYMENTS",
                 "VLLM_DEPLOYMENTS",
                 "QWEN3_ASR_VLLM_DEPLOYMENTS",
+                "STRATA_DEPLOYMENTS",
                 "AZURE_AI_VISION_DEPLOYMENTS",
                 "NON_STREAMING_DEPLOYMENTS",
             )
